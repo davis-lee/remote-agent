@@ -26,7 +26,8 @@ docker compose exec ai-agents bash /tmp/dev-workflow/install.sh
 配置写入 `~/.claude`(持久化 volume,重建容器不丢)。之后:
 
 - 全局 `CLAUDE.md`、`/spec` `/bugfix` `/ship`、git-guard 钩子**立即对所有项目生效**。
-- 想给某个仓库加 push 硬后盾:进该仓库目录运行一次 `wf-protect`。
+- push 硬后盾**自动**:install.sh 配好 git 模板(`init.templateDir`),之后每个新 `clone` / `init` 的仓库自动带 `pre-push`,不用逐个手动。
+  - 已存在的仓库补钩子:进目录跑一次 `git init`(对已有仓库安全,只补钩子,不动代码与历史),或 `wf-protect`。
 - 推送由你执行:审核后 `approve-push`(等价 `HUMAN_PUSH=1 git push`)。
 
 ## 日常怎么走

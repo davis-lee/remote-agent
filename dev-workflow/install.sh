@@ -11,6 +11,12 @@ cp "$SRC"/commands/*.md          "$DEST/commands/"
 cp "$SRC/hooks/git-guard.sh"     "$DEST/hooks/";     chmod +x "$DEST/hooks/git-guard.sh"
 cp "$SRC/git-hooks/pre-push"     "$DEST/git-hooks/"; chmod +x "$DEST/git-hooks/pre-push"
 
+# git 模板:让以后每个新 clone / init 的仓库自动带上 pre-push 硬后盾
+TPL="$HOME/.git-template"
+mkdir -p "$TPL/hooks"
+cp "$SRC/git-hooks/pre-push" "$TPL/hooks/pre-push"; chmod +x "$TPL/hooks/pre-push"
+git config --global init.templateDir "$TPL"
+
 # 合并 hooks 配置到 settings.json(已存在则深合并,不覆盖其它键)
 if [ -f "$DEST/settings.json" ]; then
   tmp=$(mktemp)
@@ -38,5 +44,6 @@ fi
 
 echo "✅ dev-workflow 已安装到 $DEST"
 echo "   - 全局 CLAUDE.md、/spec /bugfix /ship 命令、git-guard PreToolUse 钩子已就位"
-echo "   - 需要 push 硬后盾的仓库,进目录后运行一次: wf-protect"
+echo "   - 新 clone / init 的仓库自动带 pre-push 硬后盾(git 模板已配置)"
+echo "   - 已存在的仓库补钩子:进目录跑一次 git init(安全,不动代码历史);或 wf-protect"
 echo "   - 新开 shell 后 approve-push / wf-protect 生效(或先 source ~/.bashrc)"
