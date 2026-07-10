@@ -1,0 +1,41 @@
+services:
+  ai-agents:
+    build:
+      context: .                       # 用当前目录的 Dockerfile 构建
+      args:
+        # 对齐容器内外 UID/GID,值来自同目录 .env 文件(见 README 第四节)
+        HOST_UID: "${HOST_UID:-1000}"
+        HOST_GID: "${HOST_GID:-1000}"
+    container_name: ai-agents
+    # 容器内建防火墙所需的最小内核权限,仅作用于容器自身网络命名空间
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      # 项目代码目录 —— 改成你的实际路径;只挂项目,不挂 home/SSH 私钥/云凭证
+      - ./workspace:/workspace
+      # Claude Code 配置与登录凭证(重建容器不用重新登录)
+      - claude-config:/home/node/.claude
+      # Codex 配置与登录凭证
+      - codex-config:/home/node/.codex
+      # bash 命令历史
+      - command-history:/commandhistory
+      # 以后新增 agent 若有自己的配置目录,照这个模式再加一行 volume
+    environment:
+      - TZ=Asia/Shanghai
+      # 用 API Key 方式认证时取消注释(参考 README 第五节)
+      # - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # - OPENAI_API_KEY=${OPENAI_API_KEY}
+    # 需要在本地浏览器查看容器内 dev server 时取消注释:
+    # 只绑定服务器回环地址,不对公网暴露;本地再建 SSH 隧道访问(README 第八节)
+    # ports:
+    #   - "127.0.0.1:5173:5173"
+    init: true                # 用 tini 作 PID 1,正确回收僵尸进程
+    tty: true                 # 分配伪终端,交互体验正常
+    stdin_open: true          # 保持 stdin 打开
+    restart: unless-stopped   # 宿主机重启后容器自动拉起(防火墙也随之重建)
+
+volumes:
+  claude-config:
+  codex-config:
+  command-history:
