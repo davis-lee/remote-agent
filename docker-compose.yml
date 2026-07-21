@@ -14,12 +14,19 @@ services:
     volumes:
       # 项目代码目录 —— 改成你的实际路径;只挂项目,不挂 home/SSH 私钥/云凭证
       - ./workspace:/workspace
+      # 动态白名单目录::ro = 只读挂载,只能由你从 host 编辑,容器内(含 AI/依赖)不可改
+      # 改完 host 上的 firewall/allowlist.txt 后,在容器内跑  fw reload  生效,无需 rebuild
+      - ./firewall:/etc/firewall:ro
       # Claude Code 配置与登录凭证(重建容器不用重新登录)
       - claude-config:/home/node/.claude
       # Codex 配置与登录凭证
       - codex-config:/home/node/.codex
       # bash 命令历史
       - command-history:/commandhistory
+      # 持久化 tmux 会话存档(tmux-session save 的结果,重建容器不丢)
+      - tmux-data:/home/node/.tmux-data
+      # 持久化 git 配置与凭证(~/.gitconfig / ~/.git-credentials,重建不丢)
+      - git-config:/home/node/.gitpersist
       # 以后新增 agent 若有自己的配置目录,照这个模式再加一行 volume
     environment:
       - TZ=Asia/Shanghai
@@ -39,3 +46,5 @@ volumes:
   claude-config:
   codex-config:
   command-history:
+  tmux-data:
+  git-config:

@@ -1,0 +1,10 @@
+# 动态白名单 —— 每行一个:域名 / IPv4 / CIDR;# 开头为注释
+# 本文件被 bind-mount 进容器 /etc/firewall/allowlist.txt
+# 编辑本文件后执行  fw reload  即生效(无需 rebuild / recompose)
+# 或在容器内用  fw allow <域名|IP>  即时放行并自动追加到这里
+#
+# 示例(去掉行首 # 启用):
+# api.stripe.com
+# api.twilio.com
+# 203.0.113.10
+# 198.51.100.0/24

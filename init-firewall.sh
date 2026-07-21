@@ -32,6 +32,51 @@ ALLOWED_DOMAINS=(
     # --- Playwright 浏览器下载(项目锁定特定版本时运行期需要)---
     "cdn.playwright.dev"
     "playwright.download.prss.microsoft.com"
+    # --- Python / pip ---
+    "pypi.org"
+    "files.pythonhosted.org"
+    # --- Rust / cargo ---
+    "crates.io"
+    "static.crates.io"
+    "index.crates.io"
+    # --- Debian apt(容器内运行期装系统包)---
+    "deb.debian.org"
+    "security.debian.org"
+    # --- 前端包镜像 / CDN(注意:CDN 的 IP 常轮换,偶发失效时 restart 重解析)---
+    "registry.yarnpkg.com"
+    "cdn.jsdelivr.net"
+    "unpkg.com"
+    "cdnjs.cloudflare.com"
+    "fonts.googleapis.com"
+    "fonts.gstatic.com"
+    # ============================================================
+    # 常用知名服务(具名域名)
+    # 注意:DNS 无法解析通配符,写 *.google.com 无效;只能逐个列具体子域名。
+    #       每多放行一个域名 = 多一条潜在外传通道,不用的建议注释掉。
+    # ============================================================
+    # -- Google --
+    "google.com"
+    "www.google.com"
+    "www.googleapis.com"                  # Google API 总入口(多数 REST API)
+    "storage.googleapis.com"              # GCS 存储桶 / 静态资源
+    "accounts.google.com"                 # 登录 / OAuth
+    "oauth2.googleapis.com"               # OAuth token
+    "generativelanguage.googleapis.com"   # Gemini API
+    "translate.googleapis.com"            # 翻译 API
+    # -- 容器镜像 / 更多代码托管 --
+    "ghcr.io"                             # GitHub 容器镜像
+    "pkg-containers.githubusercontent.com"
+    "gitlab.com"
+    # -- 常用文档 / 交互(按需保留)--
+    "stackoverflow.com"
+    "developer.mozilla.org"
+    # ============================================================
+    # 你自己的第三方 API —— 在下面按需增删(去掉行首 # 启用)
+    # 这些是你的应用/开发过程要访问、且你放了 API Key 的服务域名
+    # ============================================================
+    "anewstip.com"
+	"api.anewstip.com"
+	"test.anewstip.com"
 )
 
 # 1) 保存 Docker 内部 DNS(127.0.0.11)的 NAT 规则,清空规则表后再恢复它
@@ -45,6 +90,15 @@ iptables -t nat -X
 iptables -t mangle -F      # 清空 mangle 表
 iptables -t mangle -X
 ipset destroy allowed-domains 2>/dev/null || true   # 删除旧 ipset(不存在则忽略)
+
+# 关键:重置默认策略为 ACCEPT —— 让"重建过程中"本脚本自身能联网
+# (抓 GitHub IP、dig 解析域名)。iptables -F 只清规则、不改默认策略;
+# 若上一次已把 OUTPUT 设为 DROP,不重置的话本脚本 curl api.github.com 会被
+# 自己残留的 DROP 拦住 → fw reload 卡死 / 半应用 / 全断网。
+# 末尾第 5 步会把默认策略重新设回 DROP,最终锁定状态不受影响。
+iptables -P INPUT ACCEPT
+iptables -P OUTPUT ACCEPT
+iptables -P FORWARD ACCEPT
 
 if [ -n "$DOCKER_DNS_RULES" ]; then
     echo "Restoring Docker DNS rules..."
@@ -103,6 +157,24 @@ for domain in "${ALLOWED_DOMAINS[@]}"; do
         ipset add allowed-domains "$ip" 2>/dev/null || true   # 重复 IP 忽略
     done < <(echo "$ips")
 done
+
+# 3c) 外部动态白名单文件(bind-mount 进来,增删无需 rebuild;每次 reload 都读取)
+#     每行一个:域名 或 IPv4 或 CIDR;# 开头为注释
+EXTRA_FILE=/etc/firewall/allowlist.txt
+if [ -f "$EXTRA_FILE" ]; then
+  echo "Loading dynamic allowlist from $EXTRA_FILE ..."
+  while IFS= read -r line; do
+    line="${line%%#*}"                              # 去掉注释
+    line="$(printf '%s' "$line" | tr -d '[:space:]')"  # 去空白
+    [ -z "$line" ] && continue
+    if [[ "$line" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?$ ]]; then
+      ipset add allowed-domains "$line" 2>/dev/null || true    # 直接是 IP/CIDR
+    else
+      ips=$(dig +noall +answer A "$line" | awk '$4=="A"{print $5}' || true)   # 是域名则解析
+      for ip in $ips; do ipset add allowed-domains "$ip" 2>/dev/null || true; done
+    fi
+  done < "$EXTRA_FILE"
+fi
 
 # 4) 放行与宿主机所在网段的通信(端口映射的流量从这里进出)
 HOST_IP=$(ip route | grep default | cut -d" " -f3)   # 默认网关 = Docker 网桥地址

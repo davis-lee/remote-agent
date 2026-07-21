@@ -63,17 +63,26 @@ RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhisto
   && chown -R node /commandhistory \
   && echo "$SNIPPET" >> /home/node/.bashrc \
   && echo "alias ll='ls -alF'" >> /home/node/.bashrc \
-  && echo 'claude() { if [ "$#" -eq 0 ]; then command claude --remote-control "R-$(basename "$PWD")-$(date +%y%m%d%H)"; else command claude "$@"; fi; }' >> /home/node/.bashrc \
-     # 无参启动 claude 时,会话名 = R-<当前目录名>-<YYMMDDHH> \
-  && echo 'set -g mouse on' > /home/node/.tmux.conf \
-  && chown node:node /home/node/.tmux.conf   # tmux 开启鼠标滚轮/点击支持
+  && echo 'claude() { if [ "$#" -eq 0 ]; then command claude --remote-control "R-$(basename "$PWD")-$(date +%y%m%d%H)"; else command claude "$@"; fi; }' >> /home/node/.bashrc
+# ↑ 无参启动 claude 时,会话名 = R-<当前目录名>-<YYMMDDHH>;tmux 配置见下方 COPY tmux.conf
+
+# tmux 配置(含鼠标 + 自动保存会话钩子)
+COPY --chown=node:node tmux.conf /home/node/.tmux.conf
 
 # 标记环境变量,方便 agent 或脚本识别自己在沙箱里
 ENV DEVCONTAINER=true
 
 # /workspace 是项目代码的挂载点;各 agent 的配置目录提前建好并授权
-RUN mkdir -p /workspace /home/node/.claude /home/node/.codex && \
-  chown -R node:node /workspace /home/node/.claude /home/node/.codex
+# .tmux-data 是命名卷挂载点;把 tmux-session 的存档 ~/.tmux-session 软链进去,
+# 这样 tmux-session save 写入的会话列表落在卷里,docker 重建也不丢
+RUN mkdir -p /workspace /home/node/.claude /home/node/.codex /home/node/.tmux-data /home/node/.gitpersist && \
+  ln -sf /home/node/.tmux-data/session /home/node/.tmux-session && \
+  ln -sf /home/node/.gitpersist/gitconfig /home/node/.gitconfig && \
+  ln -sf /home/node/.gitpersist/git-credentials /home/node/.git-credentials && \
+  chown -R node:node /workspace /home/node/.claude /home/node/.codex /home/node/.tmux-data /home/node/.gitpersist && \
+  chown -h node:node /home/node/.tmux-session /home/node/.gitconfig /home/node/.git-credentials
+# ↑ ~/.gitconfig 与 ~/.git-credentials 软链到 .gitpersist 命名卷,
+#   这样 git 配置和凭证(token)重建容器也不丢
 
 WORKDIR /workspace
 
@@ -109,10 +118,14 @@ RUN npx -y playwright install chromium
 # sudoers 只授权 node 用户免密执行 init-firewall.sh 这一个命令,
 # 除此之外 node 没有任何 root 权限
 # -----------------------------------------------------------------------------
-COPY init-firewall.sh entrypoint.sh /usr/local/bin/
+COPY init-firewall.sh entrypoint.sh fw-allow.sh fw fw-check tmux-session /usr/local/bin/
 USER root
-RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/entrypoint.sh && \
-  echo "node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" > /etc/sudoers.d/node-firewall && \
+RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/entrypoint.sh \
+             /usr/local/bin/fw-allow.sh /usr/local/bin/fw /usr/local/bin/fw-check \
+             /usr/local/bin/tmux-session && \
+  mkdir -p /etc/firewall && \
+  # sudoers 只授权这两个脚本:重建防火墙、向白名单添加条目(不能 flush/destroy)
+  printf 'node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh, /usr/local/bin/fw-allow.sh\n' > /etc/sudoers.d/node-firewall && \
   chmod 0440 /etc/sudoers.d/node-firewall
 
 # tmux 等登录 shell 会重读 /etc/profile 导致 PATH 被重置,

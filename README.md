@@ -217,12 +217,27 @@ codex                                        # 启动 Codex
 
 tmux 最小用法:`Ctrl+B` 松开再按 `D` = 挂起离开(agent 继续跑);重进容器后 `tmux new -A -s work` 恢复。
 
-嫌命令长可给 davis 设别名(路径按服务器上实际目录调整):
+### tmux 会话保存与恢复(docker 重建也不丢)
+
+容器内置 `tmux-session` 工具,把当前所有会话/窗口/工作目录存成一份存档;该存档软链到命名卷 `tmux-data`,所以 `docker compose up -d --build` 重建后依然在。
 
 ```bash
-echo "alias ai='docker compose -f ~/remote-agent/docker-compose.yml exec ai-agents bash'" >> ~/.bashrc
-source ~/.bashrc                             # 生效后任意目录敲 ai 即进入容器
+tmux-session save        # 保存当前会话列表(结构变化时也会自动保存,见 tmux.conf 钩子)
+tmux-session restore     # 重建/重启后,一条命令恢复所有会话、窗口和各自的目录
 ```
+
+- **自动保存**:`tmux.conf` 里挂了钩子,新建窗口 / 关闭 pane / 重命名窗口时自动 `save`,通常不用手动存。
+- **重建流程**:`docker compose up -d --build` → `docker compose exec ai-agents bash` → `tmux-session restore`。
+- **恢复范围**:会话名、窗口名、每个窗口的工作目录(cwd 需仍存在,通常在 `/workspace` 下,持久)。**不恢复** pane 内正在跑的程序(如 claude 进程本身)——恢复的是布局和目录,进到目录后重新起 agent 即可。
+- 存档在卷里,查看:`docker compose exec ai-agents cat /home/node/.tmux-session`。
+
+**常用命令别名**:仓库里的 `host-aliases.sh` 汇总了 host 端管理容器的一行简写(进容器、起 agent、重建、加白名单、tmux 存档等,均带注释)。一次性装好:
+
+```bash
+cat ~/ai-agents/host-aliases.sh >> ~/.bashrc && source ~/.bashrc
+```
+
+之后常用:`ai`(进容器)、`aic`(起 Claude)、`ai-build`(重建)、`ai-logs`(看日志)、`fw-add x.com`(加白名单)、`ai-save`/`ai-restore`(tmux 会话)。容器**内部**的 `claude`、`ll`、`approve-push`、`wf-protect` 已在容器自身 bashrc,无需重复。
 
 其它常用命令:
 
@@ -247,9 +262,13 @@ docker compose logs -f                       # 查看容器日志
 
 ```bash
 docker compose exec ai-agents bash           # 进入容器
-git config --global credential.helper store  # 让 git 记住凭证(存在容器 home,即 volume 里)
+git config --global user.name  "你的名字"     # 提交身份
+git config --global user.email "you@example.com"
+git config --global credential.helper store  # 让 git 记住凭证
 git clone https://github.com/你/仓库.git      # 首次操作时:用户名填 GitHub 用户名,密码粘贴 token
 ```
+
+**凭证持久化**:`~/.gitconfig` 与 `~/.git-credentials` 已软链到命名卷 `git-config`,所以上面这些配置和 token **重建容器也不丢**,只需首次设置一次。注意 token 在 `~/.git-credentials` 里是明文(和标准 git 一样),该卷在服务器上、仅 root/davis 可及。
 
 更稳的玩法:token 只给 Contents = Read(AI 只能 pull),改动由你在宿主机审查后手动 push。
 
@@ -377,6 +396,60 @@ docker compose logs -f                       # 确认防火墙自检通过
 | 启动日志报 `WARN: Failed to resolve xxx, skipping` | 该域名当前解析不到(下线或 DNS 波动),已自动跳过,不影响启动;若是你新加的域名,检查拼写 |
 | 容器内新文件宿主机没权限 | `.env` 的 HOST_UID 未对齐,重新生成 .env 并 `up -d --build` |
 | 页面加载外部字体/JS 失败 | 属正常拦截;需要就把对应 CDN 域名加白名单 |
+| 依赖下载/第三方 API 连不上 | 用 `fw allow <域名>` 即时放行(见十二点五节),无需重建 |
+| CDN 类域名(jsdelivr/cloudflare/AWS)时通时断 | IP 轮换所致:`fw reload` 重新解析;频繁抖动则改用 SNI 过滤代理按域名放行 |
+| `fw reload` 后**所有**域名(含 github)都连不上 | 旧版脚本的陷阱:reload 中途被 Ctrl-C / github 抓取失败,留下"默认拒绝且无放行规则"。恢复(host 上):`docker compose exec -u root ai-agents iptables -P OUTPUT ACCEPT` 再 `docker compose exec -u root ai-agents /usr/local/bin/init-firewall.sh`。新版脚本已修复(flush 后重置策略为 ACCEPT),重建一次即可根治 |
+
+## 十二点五、动态增删白名单(无需 rebuild)
+
+白名单分两部分:`init-firewall.sh` 里烤进镜像的**基础域名**(改这些仍需重建),以及 `firewall/allowlist.txt` 这个 **bind-mount 的动态文件**(随时增删、`fw reload` 立即生效)。
+
+本方案采用 **host-only 只读挂载**(`:ro`):`allowlist.txt` **只能由你在 host(服务器)上编辑**,容器内的 AI / 依赖无法修改它——这样即便容器内某个进程想偷偷放行外传通道也做不到。容器内 `fw allow` 仍可**临时**放行(重启即失效),持久放行必须走 host。
+
+> **关于通配符**:`*.google.com` 这类写法**无效**——防火墙靠 DNS 把域名解析成 IP,而通配符没法解析。只能逐个列出实际用到的子域名(基础白名单里已内置 Google/GitHub 等一批常用具名域名)。真需要按域名整段放行,得改用 SNI 过滤代理。另外,放行 `google.com` 不等于能用 Google 搜索浏览全网——搜索结果指向的其它域名仍会被拦;要广泛浏览网页得走开放外网或代理方案。
+
+### 添加一个域名(快速,秒级 —— 推荐)
+
+`fw allow` 只解析你要加的域名并 `ipset add`,**不抓 GitHub、不重解析其它域名**,一秒生效。持久化把域名追加到 host 的 allowlist 文件即可(下次重建/重启仍在):
+
+```bash
+cd ~/ai-agents
+echo "test.anewstip.com" >> firewall/allowlist.txt              # 持久化(供以后重建加载)
+docker compose exec ai-agents fw allow test.anewstip.com        # 即时生效(秒级,不用 reload)
+```
+
+**建议**:把下面这个函数加到服务器上 davis 的 `~/.bashrc`,以后一行搞定(持久化 + 即时生效):
+
+```bash
+fw-add() {
+  local f=~/ai-agents/firewall/allowlist.txt
+  for d in "$@"; do grep -qxF "$d" "$f" 2>/dev/null || echo "$d" >> "$f"; done
+  docker compose -f ~/ai-agents/docker-compose.yml exec ai-agents fw allow "$@"
+}
+# 用法:fw-add test.anewstip.com   或   fw-add a.com b.com 1.2.3.4
+```
+
+### 什么时候才需要 fw reload(慢,少用)
+
+`fw reload` 会重跑整个防火墙脚本(重抓 GitHub IP + 全量重解析),**只在这些情况用**:你从 allowlist 文件里**删除**了条目要生效、或**批量**改了很多行想整体重来。**注意别在它跑到一半时 Ctrl-C**——会停在"设默认拒绝"之前,导致防火墙暂时全放行;让它跑完。
+
+- 查看当前放行:`docker compose exec ai-agents fw list`。
+- 文件在 host 上,只读挂载,容器内改不了;持久化一律在 host 追加。
+
+### 检测域名是否可访问
+
+```bash
+docker compose exec ai-agents fw-check api.stripe.com github.com   # 一键检测,区分失败原因
+```
+
+输出会告诉你是哪种情况:✅ 可访问 / ⛔ 被防火墙拦截(不在白名单,附放行命令)/ ⚠️ 在白名单但对方不通 / ❌ 域名解析失败。手动测也行:
+
+```bash
+docker compose exec ai-agents curl -sS -o /dev/null -w "%{http_code}\n" --connect-timeout 5 https://api.stripe.com
+# 000 = 连不上(多为被拦);200/401/403 等 = 网络已通(对方在应答)
+```
+
+注意:切换到 `:ro` 以及首次安装 `fw` 机制,需要**重建一次**容器(`docker compose up -d --build`);之后增删域名只需"编辑文件 + fw reload",不用再 compose。
 | 想看当前生效规则 | 容器内执行 `sudo ipset list allowed-domains` 与 `sudo iptables -L -n`(提示无权限属正常,sudoers 只放行了防火墙脚本;可 `docker exec -u root ai-agents iptables -L -n`) |
 
 ## 十三、安全边界
