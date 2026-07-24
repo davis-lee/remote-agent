@@ -1,0 +1,17 @@
+# 放行 AWS 服务 IP 段 —— 每行一个,编辑后在容器内跑  fw reload  生效
+# (本文件由 host 只读挂载进容器,改这里 = 由你在服务器上控制)
+#
+# 格式:
+#   S3                某服务的全部区域(服务名大写:S3 / EC2 / CLOUDFRONT / API_GATEWAY / DYNAMODB / ROUTE53 ...)
+#   S3:us-west-2      服务 + 指定区域(范围更小,推荐)
+#   ALL               AWS 全部服务(≈ 放行整个 AWS,含所有 EC2 客户主机,数据外传防护大幅削弱,慎用)
+#
+# 默认全部注释 = 不放行任何 AWS 段。按需取消注释:
+#
+# S3:us-west-2
+# CLOUDFRONT
+# EC2:us-west-2
+#
+# 要"放行 AWS 服务的所有域名",取消下面这行的注释(理解上面的风险后):
+# ALL
+DYNAMODB:us-west-2

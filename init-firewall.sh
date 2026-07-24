@@ -176,6 +176,85 @@ if [ -f "$EXTRA_FILE" ]; then
   done < "$EXTRA_FILE"
 fi
 
+# 3d) AWS 服务 IP 段(可选)—— 读 /etc/firewall/aws-allow.txt
+#     每行:服务名(大写,如 S3 / EC2 / CLOUDFRONT),或 服务:区域(如 S3:us-west-2),
+#     或单独一行 ALL = 放行 AWS 全部服务(范围极大,慎用)。# 注释、空行忽略。
+#     AWS 官方发布 ip-ranges.json,这里按 service/region 过滤后把 CIDR 加进白名单。
+AWS_FILE=/etc/firewall/aws-allow.txt
+if [ -f "$AWS_FILE" ] && grep -qvE '^[[:space:]]*(#|$)' "$AWS_FILE"; then
+  echo "Fetching AWS IP ranges..."
+  aws_json=$(curl -s --max-time 20 https://ip-ranges.amazonaws.com/ip-ranges.json || true)
+  if [ -z "$aws_json" ]; then
+    echo "WARN: 无法获取 AWS ip-ranges.json,跳过 AWS 段"
+  else
+    while IFS= read -r line; do
+      line="${line%%#*}"; line="$(printf '%s' "$line" | tr -d '[:space:]')"
+      [ -z "$line" ] && continue
+      if [ "$line" = "ALL" ]; then
+        cidrs=$(echo "$aws_json" | jq -r '.prefixes[].ip_prefix')
+      else
+        svc=$(printf '%s' "${line%%:*}" | tr '[:lower:]' '[:upper:]')   # 服务名统一大写
+        region="${line#*:}"
+        if [ "$region" = "$line" ]; then                                # 没写区域 = 全区域
+          cidrs=$(echo "$aws_json" | jq -r --arg s "$svc" '.prefixes[]|select(.service==$s)|.ip_prefix')
+        else
+          cidrs=$(echo "$aws_json" | jq -r --arg s "$svc" --arg r "$region" '.prefixes[]|select(.service==$s and .region==$r)|.ip_prefix')
+        fi
+      fi
+      n=0
+      while read -r cidr; do
+        [ -z "$cidr" ] && continue
+        ipset add allowed-domains "$cidr" 2>/dev/null || true; n=$((n+1))
+      done < <(echo "$cidrs" | aggregate -q 2>/dev/null || echo "$cidrs")
+      echo "  AWS $line: +$n 段"
+    done < "$AWS_FILE"
+  fi
+fi
+
+# 3e) Google / GCP IP 段(可选)—— 读 /etc/firewall/gcp-allow.txt
+#     每行一个关键字(# 注释、空行忽略):
+#       APIS          Google 自有服务全段(goog.json 减 cloud.json)= 所有 googleapis(含 BigQuery),不含客户 GCP 虚机;给 Google API 用最合适
+#       GOOG / ALL    goog.json 全部(所有 Google 自有 IP,范围更大)
+#       CLOUD:区域    cloud.json 某区域客户网段(如 CLOUD:us-central1,给连 GCE 实例用)
+#     Google 不按产品发布 IP 段,所以无法只放行 BigQuery;APIS 是能做到的最小范围。
+GCP_FILE=/etc/firewall/gcp-allow.txt
+if [ -f "$GCP_FILE" ] && grep -qvE '^[[:space:]]*(#|$)' "$GCP_FILE"; then
+  echo "Fetching Google IP ranges..."
+  goog=$(curl -s --max-time 20 https://www.gstatic.com/ipranges/goog.json || true)
+  cloud=$(curl -s --max-time 20 https://www.gstatic.com/ipranges/cloud.json || true)
+  if [ -z "$goog" ]; then
+    echo "WARN: 无法获取 goog.json,跳过 GCP 段"
+  else
+    while IFS= read -r line; do
+      line="${line%%#*}"; line="$(printf '%s' "$line" | tr -d '[:space:]')"
+      [ -z "$line" ] && continue
+      kw=$(printf '%s' "${line%%:*}" | tr '[:lower:]' '[:upper:]')
+      case "$kw" in
+        APIS)
+          allg=$(echo "$goog"  | jq -r '.prefixes[].ipv4Prefix // empty' | sort -u)
+          allc=$(echo "$cloud" | jq -r '.prefixes[].ipv4Prefix // empty' | sort -u)
+          cidrs=$(comm -23 <(echo "$allg") <(echo "$allc"))   # goog 减 cloud = Google 自有服务
+          ;;
+        GOOG|ALL)
+          cidrs=$(echo "$goog" | jq -r '.prefixes[].ipv4Prefix // empty')
+          ;;
+        CLOUD)
+          region="${line#*:}"
+          cidrs=$(echo "$cloud" | jq -r --arg r "$region" '.prefixes[]|select(.scope==$r)|.ipv4Prefix // empty')
+          ;;
+        *)
+          echo "  GCP 未知条目(忽略):$line"; continue ;;
+      esac
+      n=0
+      while read -r cidr; do
+        [ -z "$cidr" ] && continue
+        ipset add allowed-domains "$cidr" 2>/dev/null || true; n=$((n+1))
+      done < <(echo "$cidrs" | aggregate -q 2>/dev/null || echo "$cidrs")
+      echo "  GCP $line: +$n 段"
+    done < "$GCP_FILE"
+  fi
+fi
+
 # 4) 放行与宿主机所在网段的通信(端口映射的流量从这里进出)
 HOST_IP=$(ip route | grep default | cut -d" " -f3)   # 默认网关 = Docker 网桥地址
 if [ -z "$HOST_IP" ]; then

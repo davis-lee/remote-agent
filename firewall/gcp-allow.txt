@@ -1,0 +1,11 @@
+# 放行 Google / GCP IP 段 —— 每行一个关键字,编辑后在容器内跑  fw reload  生效
+# (本文件由 host 只读挂载进容器,改这里 = 由你在服务器上控制)
+#
+# Google 不按产品发布 IP 段,无法只放行 BigQuery;下面是能做到的范围:
+#   APIS          Google 自有服务全段(goog.json 减 cloud.json)
+#                 = 所有 googleapis(含 BigQuery / Vertex / GCS 等),不含客户 GCP 虚机 —— 推荐
+#   GOOG          goog.json 全部(所有 Google 自有 IP,范围更大)
+#   CLOUD:区域    cloud.json 某区域的客户网段,如 CLOUD:us-central1(给连别人的 GCE 实例用)
+#
+# 默认全部注释。要让 BigQuery 稳定可达(不受域名 IP 轮换影响),取消下面这行注释:
+APIS

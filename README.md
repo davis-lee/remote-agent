@@ -436,6 +436,41 @@ fw-add() {
 - 查看当前放行:`docker compose exec ai-agents fw list`。
 - 文件在 host 上,只读挂载,容器内改不了;持久化一律在 host 追加。
 
+### 放行 AWS 服务(按 IP 段)
+
+`*.amazonaws.com` 这类通配没法用 DNS 放行,但 AWS **官方发布 IP 段清单**,可整段放行。由 host 上的 `firewall/aws-allow.txt` 控制,每行一个,编辑后 `fw reload` 生效:
+
+```text
+S3:us-west-2      # 某服务 + 指定区域(范围小,推荐)
+CLOUDFRONT        # 某服务全区域(服务名大写)
+ALL               # AWS 全部服务(≈整个 AWS,含所有 EC2 客户主机,慎用)
+```
+
+```bash
+# 服务器上:编辑后重载(AWS 段需重新抓 ip-ranges.json,走 fw reload)
+nano ~/ai-agents/firewall/aws-allow.txt
+docker compose exec ai-agents fw reload
+```
+
+**安全提醒**:`ALL` 会把几乎整个 AWS 网段加进白名单——任何人租一台 EC2 就落在里面,数据外传防护大幅削弱。强烈建议只放你真正用到的服务/区域(如 `S3:us-west-2`),而不是 `ALL`。常见服务名:`S3` `EC2` `CLOUDFRONT` `API_GATEWAY` `DYNAMODB` `ROUTE53`。
+
+### 放行 Google / GCP 服务(按 IP 段)
+
+Google **不按产品**发布 IP 段(没有"只有 BigQuery"的范围),但发布了整体清单。由 `firewall/gcp-allow.txt` 控制,每行一个关键字,`fw reload` 生效:
+
+```text
+APIS              # Google 自有服务全段(goog.json 减 cloud.json)= 所有 googleapis(含 BigQuery/Vertex/GCS),不含客户 GCP 虚机 —— 给 Google API 用最合适
+GOOG              # goog.json 全部(所有 Google 自有 IP,更大)
+CLOUD:us-central1 # cloud.json 某区域客户网段(连别人的 GCE 实例才用)
+```
+
+```bash
+echo "APIS" >> ~/ai-agents/firewall/gcp-allow.txt
+docker compose exec ai-agents fw reload
+```
+
+用 `APIS` 就能让 BigQuery(及所有 googleapis 端点)稳定可达,不受域名 IP 轮换影响,范围也仅限 Google 自有服务、不含客户虚机。
+
 ### 检测域名是否可访问
 
 ```bash

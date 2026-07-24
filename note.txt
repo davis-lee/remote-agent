@@ -11,10 +11,18 @@ cat ~/ai-agents/host-aliases.sh >> ~/.bashrc && source ~/.bashrc
 
 curl -sS -o /dev/null -w "%{http_code}\n" --connect-timeout 5 https://api.anewstip.com/doc/api.html
 
-密码： Passat2026
+id key pwd： Passat2026
 
 scp -r ./* davis@100.83.94.104:~/ai-agents/
 
 scp host-aliases.sh davis@100.83.94.104:~/ai-agents/
 
+scp init-firewall.sh davis@100.83.94.104:~/ai-agents/
+
 scp Dockerfile docker-compose.yml davis@100.83.94.104:~/ai-agents/
+
+
+fw-add dynamodb.us-west-2.amazonaws.com
+
+elasticsearch
+http://44.242.79.64:19200/_cat/indices?v
